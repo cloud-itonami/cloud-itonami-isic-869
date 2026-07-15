@@ -87,14 +87,14 @@
   treatment, medication, clinical procedures, patient assessment, vital signs,
   or clinical-authority enforcement. Scanned across the proposal's op/summary/
   rationale/cites/value, never trusting the advisor's own intent."
-  ;; Emergency dispatch & triage
-  ["emergency" "emergency dispatch" "emergency-dispatch" "緊急" "緊急車両"
-   "triage" "emergency room" "emergency-room" "er" "911" "999" "119"
+  ;; Emergency dispatch & triage (NOT general 'emergency')
+  ["emergency dispatch" "emergency-dispatch" "emergency ambulance" "緊急" "緊急車両"
+   "emergency room" "emergency-room" "triage" "911" "999" "119"
    "ambulance dispatch" "ambulance-dispatch" "応急車"
    ;; Medical necessity & clinical assessment
    "medical necessity" "medical-necessity" "medical decision" "医学的必要性"
    "clinical assessment" "clinical-assessment" "臨床評価" "evaluate patient"
-   "diagnosis" "diagnos" "診断" "assessment" "assessment of patient"
+   "diagnosis" "diagnos" "診断" "assessment of patient"
    ;; Treatment & care planning
    "treatment" "treatment plan" "treatment-plan" "care plan" "care-plan"
    "ケアプラン" "therapeutic" "therapy plan"
@@ -167,6 +167,6 @@
   [proposal store]
   (let [viols (check-violations proposal store)
         confidence (:confidence proposal 1.0)]
-    (or (seq viols)
-        (< confidence confidence-floor)
-        (contains? always-escalate-ops (:op proposal)))))
+    (boolean (or (seq viols)
+                 (< confidence confidence-floor)
+                 (contains? always-escalate-ops (:op proposal))))))

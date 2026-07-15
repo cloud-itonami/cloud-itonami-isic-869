@@ -11,7 +11,7 @@
 
 (defn phase-config
   "The phase rollout table. Each phase specifies which ops may auto-commit
-  (members of :auto set). An op outside :auto is held for human approval."
+   (members of :auto set). An op outside :auto is held for human approval."
   [phase-num]
   (case phase-num
     0 {:auto #{}}                                    ;; Phase 0: all held
@@ -30,13 +30,15 @@
 (defn may-auto-commit? [op phase-num]
   "True if the given op may auto-commit in the given phase (after governor
   clears it). :flag-safety-concern is NEVER auto-commit, regardless of phase."
-  (when (not= :flag-safety-concern op)
+  (if (= :flag-safety-concern op)
+    false
     (let [cfg (phase-config phase-num)]
       (contains? (:auto cfg) op))))
 
-(defn allowed-ops-for-phase [phase-num]
+(defn allowed-ops-for-phase
   "All ops allowed to be proposed at this phase. For transport, this is
-  always the closed allowlist regardless of phase -- phase only controls
-  whether they auto-commit or hold."
+   always the closed allowlist regardless of phase -- phase only controls
+   whether they auto-commit or hold."
+  [phase-num]
   #{:schedule-transport :coordinate-vehicle-availability :coordinate-supply-request
     :schedule-staff-shift-proposal :flag-safety-concern})

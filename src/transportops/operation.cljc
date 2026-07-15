@@ -18,11 +18,11 @@
 (defn intake-node
   "Parse and validate the incoming request shape."
   [state]
-  {:request (:request state)
-   :advisor-response nil
-   :governance-check nil
-   :decision nil
-   :outcome nil})
+  (assoc state
+         :advisor-response nil
+         :governance-check nil
+         :decision nil
+         :outcome nil))
 
 (defn advise-node
   "Query the advisor for recommendations."
@@ -72,7 +72,7 @@
     (when (= :auto-commit decision)
       (store/commit-record! store proposal)
       (store/append-ledger! store
-                           {:timestamp (java.util.Date.)
+                           {:timestamp (System/currentTimeMillis)
                             :op (:op proposal)
                             :decision :auto-commit
                             :proposal proposal}))
@@ -89,12 +89,11 @@
   "Execute a transport coordination proposal through the full state machine.
   Returns the final state with :outcome and :decision fields."
   [request store {:keys [current-phase] :or {current-phase 0}}]
-  (let [state {:request request
-               :store store
-               :current-phase current-phase}
-        state (intake-node state)
-        state (advise-node state)
-        state (govern-node state)
-        state (decide-node state)
-        state (commit-node state)]
-    state))
+  (-> {:request request
+       :store store
+       :current-phase current-phase}
+      intake-node
+      advise-node
+      govern-node
+      decide-node
+      commit-node))

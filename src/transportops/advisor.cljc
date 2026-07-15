@@ -12,7 +12,7 @@
 
 (defrecord MockAdvisor []
   Advisor
-  (advise [_ request store]
+  (advise [_ request _store]
     (let [op (:op request)]
       (case op
         :schedule-transport
@@ -70,6 +70,7 @@
 
         ;; Fallback for unknown op
         {:op op
+         :vehicle-id (:vehicle-id request)
          :summary "Unknown operation"
          :confidence 0.0
          :effect :propose
@@ -79,7 +80,7 @@
   (->MockAdvisor))
 
 ;; LLM seam (stub for now, langchain integration point)
-(defn llm-advisor [model-name]
+(defn llm-advisor [_model-name]
   ;; TODO: Implement real LLM advisor via langchain.model
   ;; For now, return the mock
   (mock-advisor))
