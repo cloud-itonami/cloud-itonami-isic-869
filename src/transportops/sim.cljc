@@ -1,10 +1,14 @@
 (ns transportops.sim
-  "Demo driver for the non-emergency transport logistics coordination actor.
-
-  Exercises all scenarios: phase-1 approval-gated proposals, phase-3
-  auto-commits for logistics ops, always-escalating safety flags, and
-  all HARD-hold scenarios."
-  (:require [transportops.store :as store]
+  "Demo driver -- `clojure -M:run` / `clojure -M:dev:run`. Drives the
+  REAL compiled `langgraph-clj` `StateGraph` (`transportops.operation/
+  build`) end-to-end through a phase-3 auto-commit, an always-escalate
+  safety-concern flag (dispatcher approves), a phase-0 hold, and all
+  HARD-block scenarios (unregistered vehicle, unverified vehicle,
+  non-:propose effect, scope-excluded content), then prints the
+  resulting audit ledger. Mirrors `cerealops.sim`
+  (cloud-itonami-isic-0111) / `vegops.sim` (cloud-itonami-isic-0113)."
+  (:require [langgraph.graph :as g]
+            [transportops.store :as store]
             [transportops.operation :as operation]
             [transportops.governor :as governor]))
 
@@ -13,63 +17,82 @@
   (println (str "Scenario: " title))
   (println "=" "=" "=" "=" "=" "=" "=" "=" "=" "="))
 
-(defn -main [& _args]
+(defn- exec-op [actor tid request phase-num]
+  (g/run* actor {:request request :phase-num phase-num} {:thread-id tid}))
+
+(defn- approve! [actor tid]
+  (g/run* actor {:approval {:status :approved :by "dispatcher-01"}}
+          {:thread-id tid :resume? true}))
+
+(defn demo
+  "Run the compiled StateGraph through a phase-3 auto-commit path, an
+  always-escalating safety-concern flag (approved by a human
+  dispatcher), a phase-0 hold, and the three HARD-block scenarios;
+  print each result and the final audit ledger."
+  []
   (println "Non-Emergency Transport Logistics Coordination Actor - Demo")
 
-  ;; Scenario 1: Happy path
-  (scenario "Phase 0: Happy path (all held)")
+  (scenario "Phase 3: Auto-commit transport scheduling")
   (let [s (store/seed-db)
-        request {:op :schedule-transport :vehicle-id "van-001"}
-        result (operation/execute-proposal request s {:current-phase 0})]
-    (println "Decision:" (:decision result)))
+        actor (operation/build s)
+        result (exec-op actor "t1" {:op :schedule-transport :vehicle-id "van-001"} 3)]
+    (println (:state result))
+    (println "Decision:" (:decision (:state result))))
 
-  ;; Scenario 2: Phase 3 auto-commit
-  (scenario "Phase 3: Auto-commit supply coordination")
+  (scenario "Phase 0: Clean proposal, still held (nothing auto-commits at phase 0)")
   (let [s (store/seed-db)
-        request {:op :coordinate-supply-request :vehicle-id "van-001"}
-        result (operation/execute-proposal request s {:current-phase 3})]
-    (println "Decision:" (:decision result)))
+        actor (operation/build s)
+        result (exec-op actor "t2" {:op :coordinate-supply-request :vehicle-id "van-001"} 0)]
+    (println (:state result))
+    (println "Decision:" (:decision (:state result))))
 
-  ;; Scenario 3: Safety always escalates
-  (scenario "Always-escalating: Safety concern")
+  (scenario "Always-escalating: safety concern (ALWAYS pauses at :request-approval)")
   (let [s (store/seed-db)
-        request {:op :flag-safety-concern :vehicle-id "van-001" :description "Engine warning"}
-        result (operation/execute-proposal request s {:current-phase 3})]
-    (println "Decision:" (:decision result)))
+        actor (operation/build s)
+        held (exec-op actor "t3"
+                      {:op :flag-safety-concern :vehicle-id "van-001" :description "Engine warning"}
+                      3)]
+    (println "Status:" (:status held) "Frontier:" (:frontier held))
+    (println "-- dispatcher approves --")
+    (let [approved (approve! actor "t3")]
+      (println (:state approved))
+      (println "Decision:" (:decision (:state approved)))))
 
-  ;; Scenario 4: Unregistered vehicle
   (scenario "HARD-block: Unregistered vehicle")
   (let [s (store/seed-db)
-        request {:op :schedule-transport :vehicle-id "unknown-van"}
-        result (operation/execute-proposal request s {:current-phase 3})]
-    (println "Decision:" (:decision result)))
+        actor (operation/build s)
+        result (exec-op actor "t4" {:op :schedule-transport :vehicle-id "unknown-van"} 3)]
+    (println "Decision:" (:decision (:state result))
+             "Audit:" (:audit (:state result))))
 
-  ;; Scenario 5: Unverified vehicle
   (scenario "HARD-block: Unverified vehicle")
   (let [s (store/seed-db)
-        request {:op :schedule-transport :vehicle-id "van-003"}
-        result (operation/execute-proposal request s {:current-phase 3})]
-    (println "Decision:" (:decision result)))
+        actor (operation/build s)
+        result (exec-op actor "t5" {:op :schedule-transport :vehicle-id "van-003"} 3)]
+    (println "Decision:" (:decision (:state result))
+             "Audit:" (:audit (:state result))))
 
-  ;; Scenario 6: Non-:propose effect
-  (scenario "HARD-block: Non-:propose effect")
+  (scenario "HARD-block: Non-:propose effect (governor check, pre-graph)")
   (let [s (store/seed-db)
-        request {:op :schedule-transport :vehicle-id "van-001"}
-        result (operation/execute-proposal request s {:current-phase 3})
-        proposal (assoc (:advisor-response result) :effect :execute)
+        proposal {:op :schedule-transport :vehicle-id "van-001" :effect :execute}
         violations (governor/check-violations proposal s)]
     (println "Violations:" (map :code violations)))
 
-  ;; Scenario 7: Scope-excluded content
-  (scenario "HARD-block: Scope-excluded emergency dispatch")
+  (scenario "HARD-block: Scope-excluded emergency dispatch (governor check, pre-graph)")
   (let [s (store/seed-db)
         proposal {:op :schedule-transport
-                 :vehicle-id "van-001"
-                 :summary "Emergency ambulance dispatch for patient"
-                 :effect :propose}
+                  :vehicle-id "van-001"
+                  :summary "Emergency ambulance dispatch for patient"
+                  :effect :propose}
         violations (governor/check-violations proposal s)]
     (println "Violations:" (map :code violations)))
 
   (println "\n" "=" "=" "=" "=" "=" "=" "=" "=" "=" "=")
   (println "Demo completed successfully")
   (println "=" "=" "=" "=" "=" "=" "=" "=" "=" "="))
+
+(defn -main [& _args]
+  (demo))
+
+(comment
+  (demo))
