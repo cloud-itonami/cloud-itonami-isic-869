@@ -9,4 +9,44 @@
   :itonami.blueprint/required-technologies [:identity :forms :dmn :bpmn :audit-ledger]
   :itonami.blueprint/status :public-oss
   :itonami.blueprint/maturity :implemented
+  :itonami.blueprint/implemented-slice
+  "TransportAdvisor ⊣ TransportGovernor, langgraph-clj StateGraph
+  (langgraph.graph, transportops.operation/build), append-only audit
+  ledger (transportops.store/ledger + append-ledger!, MemStore). Fixes
+  a prior gap: `operation.cljc`'s own docstring claimed \"the
+  langgraph-clj StateGraph\" and `deps.edn` declared a real
+  `io.github.kotoba-lang/langgraph` dependency, but `execute-proposal`
+  was actually a plain `(-> state intake-node advise-node govern-node
+  decide-node commit-node)` threading pipeline -- zero `require` of
+  `langgraph.graph`, zero use of `state-graph`/`add-node`/
+  `compile-graph` anywhere in the file. Now: a genuinely compiled
+  StateGraph (`:intake -> :advise -> :govern -> :decide -+->
+  :commit / :request-approval -> :commit / :hold`) with
+  `interrupt-before #{:request-approval}` + in-memory checkpointer for
+  real human-in-the-loop resume. The Governor (three HARD, permanent,
+  un-overridable checks: vehicle-unverified, effect-not-propose,
+  scope-excluded emergency/clinical content) and the append-only audit
+  ledger were already genuinely wired in the pre-graph pipeline
+  (`store/append-ledger!` was real, not dead code) -- both are
+  preserved unchanged, and the ledger wiring now also durably records
+  every `:hold` (governor violation or phase-ineligible), not only
+  auto-commits. Five closed-allowlist ops
+  (`:schedule-transport` / `:coordinate-vehicle-availability` /
+  `:coordinate-supply-request` / `:schedule-staff-shift-proposal` /
+  `:flag-safety-concern`), all `:effect :propose` only.
+  `:flag-safety-concern` ALWAYS escalates to a human dispatcher via the
+  compiled graph's `:request-approval` node
+  (`interrupt-before`, checkpoint-based resume, proven by
+  `test/transportops/operation_test.clj` exercising commit /
+  hard-hold (unregistered + unverified vehicle) / phase-hold /
+  escalate-approve / escalate-reject through the REAL compiled graph
+  end to end, plus a `clojure -M:dev:run` demo runner producing real
+  ledger entries for every scenario). 27 tests / 133 assertions green
+  (`clojure -M:dev:test`), clj-kondo 0 errors, demo runnable
+  end-to-end. Governance-doc set (LICENSE, GOVERNANCE.md,
+  CONTRIBUTING.md, SECURITY.md, CODE_OF_CONDUCT.md), `docs/` (business
+  model + operator guide), and CI (`.github/workflows/ci.yml`,
+  sibling-checkout pattern for `:local/root` deps) added -- this repo
+  previously had none of those, unique among its cloud-itonami-isic-*
+  siblings."
   :db/id -1}]
