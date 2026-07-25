@@ -27,9 +27,10 @@
     ;; Unknown phase: conservative default (all held)
     {:auto #{}}))
 
-(defn may-auto-commit? [op phase-num]
+(defn may-auto-commit?
   "True if the given op may auto-commit in the given phase (after governor
   clears it). :flag-safety-concern is NEVER auto-commit, regardless of phase."
+  [op phase-num]
   (if (= :flag-safety-concern op)
     false
     (let [cfg (phase-config phase-num)]
