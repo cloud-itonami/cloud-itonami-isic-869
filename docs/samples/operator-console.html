@@ -30,6 +30,9 @@ p.muted,span.muted{color:var(--ink-muted);font-size:12.5px;}
 p.muted{margin:0 0 14px;}
 p.note{margin:0 0 14px;font-size:13px;background:var(--blue-50);
   border-left:4px solid var(--blue-800);padding:10px 12px;border-radius:0 4px 4px 0;}
+ul.gap{margin:0;padding:12px 12px 12px 32px;font-size:13px;background:var(--orange-50);
+  border-left:4px solid var(--orange-800);border-radius:0 4px 4px 0;}
+ul.gap li+li{margin-top:6px;}
 table{width:100%;border-collapse:collapse;font-size:13px;}
 th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);
   vertical-align:top;}
@@ -87,6 +90,10 @@ footer{max-width:1120px;margin:0 auto;padding:0 20px 40px;
         <tr><td><code>:schedule-transport</code></td><td><span class="pill muted">only if low confidence</span></td><td>phase 3</td><td><span class="pill ok">auto-commit when clean</span></td></tr>
       </tbody>
     </table>
+    <p class="note"><strong>Measured contradiction between this table and the run.</strong> Every op below is listed above as auto-commit-eligible at phase 3, yet none of them reached a <code>:committed</code> fact in this run &mdash; each was permanently blocked instead:</p>
+    <ul class="gap">
+      <li><code>:schedule-staff-shift-proposal</code> &mdash; blocked by <code>vehicle-unverified</code>. <code>transportops.advisor</code>&rsquo;s branch for this op emits no <code>:vehicle-id</code>, so the governor&rsquo;s first HARD check resolves <code>(store/vehicle store nil)</code> to <code>nil</code> and refuses. The phase table therefore promises an auto-commit that the advisor/governor pair cannot deliver &mdash; see the empty Subject and the blank vehicle id in the governor message below.</li>
+    </ul>
   </section>
   <section class="card">
     <h2>HARD governor holds this run (5 fact(s), 3 distinct rule(s))</h2>
@@ -114,11 +121,13 @@ footer{max-width:1120px;margin:0 auto;padding:0 20px 40px;
   </section>
   <section class="card">
     <h2>Human-in-the-loop decisions</h2>
-    <p class="muted">The graph pauses at <code>:request-approval</code> (<code>interrupt-before</code>) and only resumes when a dispatcher supplies a decision. Both outcomes are exercised here.</p>
+    <p class="muted">The graph pauses at <code>:request-approval</code> (<code>interrupt-before</code>) and only resumes when a dispatcher supplies a decision. Both outcomes are exercised in this run: one safety flag approved, one rejected.</p>
+    <p class="note"><strong>A granted approval reaches the store only as <code>:approved-by</code> on the <code>:committed</code> fact.</strong> <code>store/append-ledger!</code> is called from the <code>:commit</code> and <code>:hold</code> terminal nodes only, so the <code>:approval-requested</code> and <code>:approval-granted</code> facts that the <code>:decide</code> and <code>:request-approval</code> nodes emit exist only in the run&rsquo;s in-memory <code>:audit</code> channel and never persist &mdash; measured: 0 <code>:approval-requested</code> and 0 <code>:approval-granted</code> fact(s) in the ledger, against 1 <code>:committed</code> fact(s) that do carry an approver. A rejection does land, as <code>:approval-rejected</code>, but <strong>none of the 1 rejection fact(s) name the rejecting dispatcher</strong> &mdash; <code>transportops.operation</code>&rsquo;s <code>hold-fact</code> does not copy <code>(:by approval)</code> onto the fact it writes, so &ldquo;who rejected this?&rdquo; is not recoverable from the store even though the resume call supplied it.</p>
     <table>
-      <thead><tr><th>Outcome</th><th>Op</th><th>Subject</th><th>Dispatcher / reason</th><th>Advisor confidence</th></tr></thead>
+      <thead><tr><th>Outcome</th><th>Op</th><th>Subject</th><th>Dispatcher</th><th>Reason</th></tr></thead>
       <tbody>
-        <tr><td><span class="pill critical">rejected</span></td><td><code>:flag-safety-concern</code></td><td>van-002</td><td>approver-rejected</td><td>&mdash;</td></tr>
+        <tr><td><span class="pill ok">granted &amp; committed</span></td><td><code>:flag-safety-concern</code></td><td>van-001</td><td>dispatcher-01</td><td>&mdash;</td></tr>
+        <tr><td><span class="pill critical">rejected</span></td><td><code>:flag-safety-concern</code></td><td>van-002</td><td><span class="pill muted">not retained by the store</span></td><td>approver-rejected</td></tr>
       </tbody>
     </table>
   </section>

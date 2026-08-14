@@ -224,6 +224,58 @@
               (pill "ok" "auto-commit when clean")
               (pill "warn" "held for a human")))))
 
+(defn- unreachable-auto-ops
+  "Ops the phase table says MAY auto-commit at phase 3 but which never
+  produced a `:committed` fact in this run, paired with the governor
+  rule(s) that actually blocked them.
+
+  Computed by comparing `phase/may-auto-commit?` against the ledger, so
+  this is a measurement of this run and not a claim about the code: if
+  the gap is closed the row disappears by itself, and if a new one
+  opens it appears without an edit here."
+  [ledger]
+  (let [committed-ops (set (map :op (filter #(= :committed (:t %)) ledger)))
+        attempted-ops (set (map :op ledger))]
+    (vec
+     (for [op (sort-by str governor/allowed-ops)
+           :when (and (phase/may-auto-commit? op 3)
+                      (contains? attempted-ops op)
+                      (not (contains? committed-ops op)))]
+       {:op op
+        :blockers (->> ledger
+                       (filter #(and (= :governor-hold (:t %)) (= op (:op %))))
+                       (mapcat :violations)
+                       (map :code)
+                       distinct sort vec)}))))
+
+(defn- gate-note
+  "The paragraph printed under the operation gate, DERIVED from
+  `unreachable-auto-ops`. Silent when nothing contradicts."
+  [ledger]
+  (let [gaps (unreachable-auto-ops ledger)]
+    (when (seq gaps)
+      (str "    <p class=\"note\"><strong>Measured contradiction between this table and the run.</strong> "
+           "Every op below is listed above as auto-commit-eligible at phase 3, yet none of them "
+           "reached a <code>:committed</code> fact in this run &mdash; each was permanently blocked "
+           "instead:</p>\n"
+           "    <ul class=\"gap\">\n"
+           (str/join
+            "\n"
+            (for [{:keys [op blockers]} gaps]
+              (str "      <li><code>" (esc op) "</code> &mdash; blocked by "
+                   (if (seq blockers)
+                     (str "<code>" (str/join "</code>, <code>" (map (comp esc name) blockers)) "</code>")
+                     "an unrecorded cause")
+                   (when (= [:vehicle-unverified] blockers)
+                     (str ". <code>transportops.advisor</code>&rsquo;s branch for this op emits no "
+                          "<code>:vehicle-id</code>, so the governor&rsquo;s first HARD check resolves "
+                          "<code>(store/vehicle store nil)</code> to <code>nil</code> and refuses. The "
+                          "phase table therefore promises an auto-commit that the advisor/governor "
+                          "pair cannot deliver &mdash; see the empty Subject and the blank vehicle id "
+                          "in the governor message below"))
+                   ".</li>")))
+           "\n    </ul>\n"))))
+
 ;; ----------------------------- HARD holds ----------------------------------
 
 (defn- violation-rows [ledger]
@@ -239,20 +291,74 @@
 
 ;; ----------------------------- approvals -----------------------------------
 
+(defn- approval-fact?
+  "A ledger fact that is evidence of a human decision. Deliberately
+  includes a `:committed` fact carrying `:approved-by`, because -- as
+  `approval-note` MEASURES below -- that is the only form in which a
+  GRANT reaches this repo's store at all."
+  [f]
+  (or (#{:approval-requested :approval-granted :approval-rejected} (:t f))
+      (and (= :committed (:t f)) (some? (:approved-by f)))))
+
 (defn- approval-rows [ledger]
   (str/join
    "\n"
-   (for [f ledger
-         :when (#{:approval-requested :approval-granted :approval-rejected} (:t f))]
+   (for [f ledger :when (approval-fact? f)]
      (format "        <tr><td>%s</td><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s</td></tr>"
              (case (:t f)
                :approval-requested (pill "warn" "requested")
                :approval-granted   (pill "ok" "granted")
-               :approval-rejected  (pill "critical" "rejected"))
+               :approval-rejected  (pill "critical" "rejected")
+               :committed          (pill "ok" "granted &amp; committed"))
              (esc (:op f))
              (opt (:subject f))
-             (opt (or (:by f) (some-> (:reason f) name)))
-             (if (some? (:confidence f)) (esc (:confidence f)) dash)))))
+             (if-let [by (or (:by f) (:approved-by f))]
+               (esc by)
+               (pill "muted" "not retained by the store"))
+             (opt (some-> (:reason f) name))))))
+
+(defn- approval-note
+  "MEASURES which approval-lifecycle facts actually survive into the
+  store, instead of asserting a known scaffold defect. Every number
+  below is counted from this run's ledger, so the paragraph rewrites
+  itself if `store/append-ledger!`'s call sites change."
+  [ledger]
+  (let [requested (filterv #(= :approval-requested (:t %)) ledger)
+        granted   (filterv #(= :approval-granted (:t %)) ledger)
+        rejected  (filterv #(= :approval-rejected (:t %)) ledger)
+        commit-by (filterv #(and (= :committed (:t %)) (some? (:approved-by %))) ledger)
+        rej-by    (filterv #(some? (:by %)) rejected)]
+    (str
+     "<p class=\"muted\">The graph pauses at <code>:request-approval</code> "
+     "(<code>interrupt-before</code>) and only resumes when a dispatcher supplies a decision. "
+     "Both outcomes are exercised in this run: one safety flag approved, one rejected.</p>\n"
+     "    <p class=\"note\">"
+     (if (and (empty? requested) (empty? granted) (seq commit-by))
+       (str "<strong>A granted approval reaches the store only as <code>:approved-by</code> on the "
+            "<code>:committed</code> fact.</strong> <code>store/append-ledger!</code> is called from "
+            "the <code>:commit</code> and <code>:hold</code> terminal nodes only, so the "
+            "<code>:approval-requested</code> and <code>:approval-granted</code> facts that the "
+            "<code>:decide</code> and <code>:request-approval</code> nodes emit exist only in the "
+            "run&rsquo;s in-memory <code>:audit</code> channel and never persist &mdash; measured: "
+            (count requested) " <code>:approval-requested</code> and " (count granted)
+            " <code>:approval-granted</code> fact(s) in the ledger, against " (count commit-by)
+            " <code>:committed</code> fact(s) that do carry an approver.")
+       (str "Measured in this run&rsquo;s ledger: " (count requested)
+            " <code>:approval-requested</code>, " (count granted)
+            " <code>:approval-granted</code>, " (count commit-by)
+            " <code>:committed</code> fact(s) carrying <code>:approved-by</code>."))
+     (when (seq rejected)
+       (str " A rejection does land, as <code>:approval-rejected</code>, but "
+            (if (seq rej-by)
+              (str (count rej-by) " of " (count rejected)
+                   " rejection fact(s) name the rejecting dispatcher.")
+              (str "<strong>none of the " (count rejected)
+                   " rejection fact(s) name the rejecting dispatcher</strong> &mdash; "
+                   "<code>transportops.operation</code>&rsquo;s <code>hold-fact</code> does not copy "
+                   "<code>(:by approval)</code> onto the fact it writes, so &ldquo;who rejected "
+                   "this?&rdquo; is not recoverable from the store even though the resume call "
+                   "supplied it."))))
+     "</p>")))
 
 ;; ----------------------------- audit ledger --------------------------------
 
@@ -394,6 +500,9 @@
     "p.muted{margin:0 0 14px;}"
     "p.note{margin:0 0 14px;font-size:13px;background:var(--blue-50);"
     "  border-left:4px solid var(--blue-800);padding:10px 12px;border-radius:0 4px 4px 0;}"
+    "ul.gap{margin:0;padding:12px 12px 12px 32px;font-size:13px;background:var(--orange-50);"
+    "  border-left:4px solid var(--orange-800);border-radius:0 4px 4px 0;}"
+    "ul.gap li+li{margin-top:6px;}"
     "table{width:100%;border-collapse:collapse;font-size:13px;}"
     "th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);"
     "  vertical-align:top;}"
@@ -418,19 +527,25 @@
 ;; Document
 ;; ============================================================================
 
-(defn- section [title lead headers body-rows]
-  (str "  <section class=\"card\">\n"
-       "    <h2>" title "</h2>\n"
-       "    " lead "\n"
-       "    <table>\n"
-       "      <thead><tr>"
-       (str/join "" (map #(str "<th>" % "</th>") headers))
-       "</tr></thead>\n"
-       "      <tbody>\n"
-       body-rows "\n"
-       "      </tbody>\n"
-       "    </table>\n"
-       "  </section>\n"))
+(defn- section
+  "One card: heading, lead block, table, and an optional trailing block
+  rendered under the table (used for notes that are only meaningful
+  once the reader has seen the rows)."
+  ([title lead headers body-rows] (section title lead headers body-rows nil))
+  ([title lead headers body-rows after]
+   (str "  <section class=\"card\">\n"
+        "    <h2>" title "</h2>\n"
+        "    " lead "\n"
+        "    <table>\n"
+        "      <thead><tr>"
+        (str/join "" (map #(str "<th>" % "</th>") headers))
+        "</tr></thead>\n"
+        "      <tbody>\n"
+        body-rows "\n"
+        "      </tbody>\n"
+        "    </table>\n"
+        (or after "")
+        "  </section>\n")))
 
 (defn render
   "Renders the whole console from a store `db` that has already been
@@ -488,7 +603,8 @@
            "<code>transportops.governor/always-escalate-ops</code> directly &mdash; this table is "
            "computed, not transcribed, so it cannot drift from the code.</p>")
       ["Op" "Escalates to a human" "First auto-commit phase" "At phase 3"]
-      (str/join "\n" (map gate-row (sort-by str governor/allowed-ops))))
+      (str/join "\n" (map gate-row (sort-by str governor/allowed-ops)))
+      (gate-note ledger))
 
      (section
       (str "HARD governor holds this run (" (count hard) " fact(s), "
@@ -519,10 +635,8 @@
 
      (section
       "Human-in-the-loop decisions"
-      (str "<p class=\"muted\">The graph pauses at <code>:request-approval</code> "
-           "(<code>interrupt-before</code>) and only resumes when a dispatcher supplies a "
-           "decision. Both outcomes are exercised here.</p>")
-      ["Outcome" "Op" "Subject" "Dispatcher / reason" "Advisor confidence"]
+      (approval-note ledger)
+      ["Outcome" "Op" "Subject" "Dispatcher" "Reason"]
       (approval-rows ledger))
 
      (section
