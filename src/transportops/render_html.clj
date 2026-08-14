@@ -614,7 +614,12 @@
            "<code>transportops.operation</code>&rsquo;s <code>:decide</code> node tests "
            "violations before it tests escalation, so no human sign-off can override them. "
            "Distinct rules fired: <code>"
-           (esc (str/join "</code>, <code>" (map name rules)))
+           ;; Escape each rule name, THEN join with the markup separator.
+           ;; Joining first and escaping the result would escape the
+           ;; separator's own tags too, printing a literal `</code>, <code>`
+           ;; to the reader -- `esc`'s docstring says it is for RAW values
+           ;; only. Same shape as `gate-note`'s blocker list.
+           (str/join "</code>, <code>" (map (comp esc name) rules))
            "</code>.</p>")
       ["Op" "Subject" "Rule" "Governor message"]
       (violation-rows ledger))
