@@ -1,0 +1,697 @@
+(ns transportops.render-html
+  "Build-time HTML renderer for `docs/samples/operator-console.html`.
+
+  This is a GENERATOR, not a hand-written page. It drives THIS repo's
+  real actor stack -- the compiled `langgraph-clj` StateGraph in
+  `transportops.operation` (via `langgraph.graph/run*`), the independent
+  `transportops.governor`, the `transportops.phase` rollout gate and the
+  `transportops.store` SSoT -- through one scenario, then renders the
+  resulting store + append-only ledger. Every vehicle id, violation code,
+  violation message, confidence, disposition and audit fact on the page
+  is real output of that run. Nothing is hand-typed and nothing is
+  invented: if you change `store/demo-data` or a governor rule, the page
+  changes on the next build.
+
+  Determinism: the store is `store/seed-db` (a fresh `MemStore` atom),
+  the advisor is the deterministic `advisor/MockAdvisor`, and no
+  timestamp, hostname, path or random value reaches the page content.
+  Two consecutive runs are byte-identical.
+
+  Build-time invariant: `-main` REFUSES to write the page if the run
+  produced zero `:governor-hold` facts. A console that shows only happy
+  paths would misrepresent this actor -- the whole point of the
+  Governor is that it can permanently refuse -- so the HARD-hold
+  requirement is enforced by the build, not by convention.
+
+  Styling: self-contained CSS, no jp-go-dds dependency. This repo's
+  build deps stay exactly as they were (langgraph only), so the page
+  builds offline in a standalone fork. The palette is not invented
+  either -- the hex values are the デジタル庁デザインシステム (DADS)
+  primitives already vendored into this repo's own `docs/index.html`
+  (`--color-primitive-blue-800` etc.), copied as literals so the
+  console matches the product face without pulling the vendored
+  stylesheet in. Tint backgrounds use the `-50`/`-100` primitive steps;
+  the `--color-semantic-error-*` pair is deliberately not used (both
+  steps are dark, they are not a strong/weak pair).
+
+  Usage: `clojure -M:dev:render-html [out-file]`
+  (default `docs/samples/operator-console.html`)."
+  (:require [clojure.string :as str]
+            [langgraph.graph :as g]
+            [transportops.advisor :as advisor]
+            [transportops.governor :as governor]
+            [transportops.operation :as operation]
+            [transportops.phase :as phase]
+            [transportops.store :as store]))
+
+;; ============================================================================
+;; Scenario -- drives the REAL graph
+;; ============================================================================
+
+(defrecord DriftedAdvisor [inner]
+  advisor/Advisor
+  (advise [_ request store]
+    ;; A containment probe, injected at the documented `:advisor` seam of
+    ;; `transportops.operation/build`. It defers to the real MockAdvisor
+    ;; and then rewrites ONLY `:effect`, i.e. it claims to actuate
+    ;; directly instead of proposing. This is exactly the threat
+    ;; `transportops.governor` HARD check 2 (`:effect-not-propose`)
+    ;; exists for, and it is the only way to reach that check through
+    ;; the graph -- the shipped MockAdvisor always emits `:propose`.
+    (assoc (advisor/advise inner request store) :effect :execute)))
+
+(defn- exec! [actor tid request phase-num]
+  (g/run* actor {:request request :phase-num phase-num} {:thread-id tid}))
+
+(defn- resume! [actor tid decision by]
+  (g/run* actor {:approval {:status decision :by by}}
+          {:thread-id tid :resume? true}))
+
+(defn run-demo!
+  "Runs a fresh seeded store through every disposition this actor can
+  reach, and returns the store.
+
+  Happy path -- `van-001` (registered AND verified in
+  `store/demo-data`) clears a full phase-3 lifecycle: a supply
+  coordination, a vehicle-availability update and a transport
+  scheduling all auto-commit, then a maintenance safety flag pauses the
+  graph at `:request-approval` (`:flag-safety-concern` ALWAYS escalates
+  -- the governor and the phase table agree independently) and a human
+  dispatcher approves it.
+
+  Phase gate -- `van-002` shows the same transport scheduling HELD at
+  phase 1, where `:schedule-transport` is not yet in the auto set, and
+  a safety flag that a dispatcher REJECTS.
+
+  HARD holds -- four permanent blocks that never reach a human:
+  `van-003` is registered but NOT verified; `van-404` is absent from
+  the directory entirely; a safety flag whose description carries
+  emergency-dispatch/triage content trips the scope-exclusion content
+  scan; and the drifted advisor above trips the effect check. A staff
+  shift proposal is also run, to measure -- not assume -- how this
+  repo's advisor/governor pair handles a proposal with no vehicle at
+  all."
+  []
+  (let [db      (store/seed-db)
+        actor   (operation/build db)
+        drifted (operation/build db {:advisor (->DriftedAdvisor (advisor/mock-advisor))})]
+
+    ;; --- happy path: van-001, phase 3 ---
+    (exec! actor "a1" {:op :coordinate-supply-request :vehicle-id "van-001"} 3)
+    (exec! actor "a2" {:op :coordinate-vehicle-availability :vehicle-id "van-001"} 3)
+    (exec! actor "a3" {:op :schedule-transport :vehicle-id "van-001"
+                       :pickup-location "Dispatch Base A"
+                       :dropoff-location "Clinic North"} 3)
+    (exec! actor "a4" {:op :flag-safety-concern :vehicle-id "van-001"
+                       :description "Brake pad wear found during pre-trip inspection"} 3)
+    (resume! actor "a4" :approved "dispatcher-01")
+
+    ;; --- phase gate + human rejection: van-002 ---
+    (exec! actor "b1" {:op :schedule-transport :vehicle-id "van-002"} 1)
+    (exec! actor "b2" {:op :flag-safety-concern :vehicle-id "van-002"
+                       :description "Windshield chip spreading across driver sightline"} 3)
+    (resume! actor "b2" :rejected "dispatcher-02")
+
+    ;; --- HARD holds ---
+    (exec! actor "c1" {:op :schedule-transport :vehicle-id "van-003"} 3)
+    (exec! actor "c2" {:op :schedule-transport :vehicle-id "van-404"} 3)
+    (exec! actor "c3" {:op :flag-safety-concern :vehicle-id "van-001"
+                       :description "Requesting emergency dispatch triage for the patient on board"} 3)
+    (exec! drifted "c4" {:op :coordinate-vehicle-availability :vehicle-id "van-001"} 3)
+
+    ;; --- measurement, not assumption: a proposal carrying no vehicle ---
+    (exec! actor "c5" {:op :schedule-staff-shift-proposal :vehicle-id "van-001"} 1)
+    db))
+
+;; ============================================================================
+;; Deterministic value formatting
+;; ============================================================================
+
+(defn- esc
+  "HTML-escape a raw value. Applied to RAW values only -- never to a
+  string that already contains markup, so nothing is double-escaped."
+  [v]
+  (-> (str v)
+      (str/replace "&" "&amp;")
+      (str/replace "<" "&lt;")
+      (str/replace ">" "&gt;")))
+
+(defn- edn-str
+  "EDN-ish rendering with a total order on map keys and set members, so
+  the page cannot drift on collection iteration order."
+  [v]
+  (cond
+    (nil? v) "nil"
+    (map? v) (str "{" (str/join ", "
+                                (map (fn [[k x]] (str (edn-str k) " " (edn-str x)))
+                                     (sort-by (comp str key) v)))
+                  "}")
+    (set? v) (str "#{" (str/join ", " (sort (map edn-str v))) "}")
+    (sequential? v) (str "[" (str/join ", " (map edn-str v)) "]")
+    (string? v) v
+    :else (pr-str v)))
+
+(def ^:private dash "&mdash;")
+
+(defn- opt [v] (if (or (nil? v) (and (string? v) (str/blank? v))) dash (esc v)))
+
+(defn- kw [v] (if (nil? v) dash (str "<code>" (esc v) "</code>")))
+
+(defn- pill [class label] (str "<span class=\"pill " class "\">" label "</span>"))
+
+;; ============================================================================
+;; Ledger queries -- everything below reads the real run
+;; ============================================================================
+
+(defn- hard-holds
+  "Ledger facts that are permanent governor blocks: a `:governor-hold`
+  carrying at least one violation. Distinguished from a phase hold by
+  the violations, not by the fact type."
+  [ledger]
+  (filterv #(and (= :governor-hold (:t %)) (seq (:violations %))) ledger))
+
+(defn- phase-holds [ledger]
+  (filterv #(and (= :governor-hold (:t %)) (empty? (:violations %))) ledger))
+
+(defn- last-fact-for [ledger subject]
+  (last (filter #(= subject (:subject %)) ledger)))
+
+(defn- status-cell [ledger subject]
+  (let [f (last-fact-for ledger subject)]
+    (cond
+      (nil? f) (pill "muted" "no activity this run")
+      (= :committed (:t f)) (pill "ok" "committed")
+      (= :approval-granted (:t f)) (pill "ok" "approved")
+      (= :approval-rejected (:t f)) (pill "warn" "approval rejected")
+      (= :approval-requested (:t f)) (pill "warn" "awaiting approval")
+      (= :governor-hold (:t f))
+      (if (seq (:violations f))
+        (pill "critical" (str "HARD hold &middot; "
+                              (esc (str/join ", " (map (comp name :code) (:violations f))))))
+        (pill "warn" (str "held &middot; " (esc (name (:reason f))))))
+      :else (pill "muted" (esc (name (:t f)))))))
+
+;; ----------------------------- fleet directory -----------------------------
+
+(defn- vehicle-row [ledger {:keys [vehicle-id location registered? verified?]}]
+  (let [admissible? (and registered? verified?)]
+    (format "        <tr><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>"
+            (esc vehicle-id)
+            (opt location)
+            (if registered? (pill "ok" "yes") (pill "critical" "no"))
+            (if verified? (pill "ok" "yes") (pill "critical" "no"))
+            (if admissible?
+              (pill "ok" "admissible")
+              (pill "critical" "HARD block &middot; vehicle-unverified"))
+            (status-cell ledger vehicle-id))))
+
+;; ----------------------------- phase / escalation gate ---------------------
+
+(defn- first-auto-phase
+  "Lowest rollout phase at which `op` may auto-commit, or nil if it
+  never can. Derived by asking `transportops.phase`, not transcribed."
+  [op]
+  (first (filter #(phase/may-auto-commit? op %) (range 0 4))))
+
+(defn- gate-row [op]
+  (let [always? (contains? governor/always-escalate-ops op)
+        p       (first-auto-phase op)]
+    (format "        <tr><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s</td></tr>"
+            (esc op)
+            (if always? (pill "warn" "always") (pill "muted" "only if low confidence"))
+            (if p (esc (str "phase " p)) (pill "warn" "never at any phase"))
+            (if (phase/may-auto-commit? op 3)
+              (pill "ok" "auto-commit when clean")
+              (pill "warn" "held for a human")))))
+
+(defn- unreachable-auto-ops
+  "Ops the phase table says MAY auto-commit at phase 3 but which never
+  produced a `:committed` fact in this run, paired with the governor
+  rule(s) that actually blocked them.
+
+  Computed by comparing `phase/may-auto-commit?` against the ledger, so
+  this is a measurement of this run and not a claim about the code: if
+  the gap is closed the row disappears by itself, and if a new one
+  opens it appears without an edit here."
+  [ledger]
+  (let [committed-ops (set (map :op (filter #(= :committed (:t %)) ledger)))
+        attempted-ops (set (map :op ledger))]
+    (vec
+     (for [op (sort-by str governor/allowed-ops)
+           :when (and (phase/may-auto-commit? op 3)
+                      (contains? attempted-ops op)
+                      (not (contains? committed-ops op)))]
+       {:op op
+        :blockers (->> ledger
+                       (filter #(and (= :governor-hold (:t %)) (= op (:op %))))
+                       (mapcat :violations)
+                       (map :code)
+                       distinct sort vec)}))))
+
+(defn- gate-note
+  "The paragraph printed under the operation gate, DERIVED from
+  `unreachable-auto-ops`. Silent when nothing contradicts."
+  [ledger]
+  (let [gaps (unreachable-auto-ops ledger)]
+    (when (seq gaps)
+      (str "    <p class=\"note\"><strong>Measured contradiction between this table and the run.</strong> "
+           "Every op below is listed above as auto-commit-eligible at phase 3, yet none of them "
+           "reached a <code>:committed</code> fact in this run &mdash; each was permanently blocked "
+           "instead:</p>\n"
+           "    <ul class=\"gap\">\n"
+           (str/join
+            "\n"
+            (for [{:keys [op blockers]} gaps]
+              (str "      <li><code>" (esc op) "</code> &mdash; blocked by "
+                   (if (seq blockers)
+                     (str "<code>" (str/join "</code>, <code>" (map (comp esc name) blockers)) "</code>")
+                     "an unrecorded cause")
+                   (when (= [:vehicle-unverified] blockers)
+                     (str ". <code>transportops.advisor</code>&rsquo;s branch for this op emits no "
+                          "<code>:vehicle-id</code>, so the governor&rsquo;s first HARD check resolves "
+                          "<code>(store/vehicle store nil)</code> to <code>nil</code> and refuses. The "
+                          "phase table therefore promises an auto-commit that the advisor/governor "
+                          "pair cannot deliver &mdash; see the empty Subject and the blank vehicle id "
+                          "in the governor message below"))
+                   ".</li>")))
+           "\n    </ul>\n"))))
+
+;; ----------------------------- HARD holds ----------------------------------
+
+(defn- violation-rows [ledger]
+  (str/join
+   "\n"
+   (for [f (hard-holds ledger)
+         v (:violations f)]
+     (format "        <tr><td><code>%s</code></td><td>%s</td><td><code>%s</code></td><td>%s</td></tr>"
+             (esc (:op f))
+             (opt (:subject f))
+             (esc (:code v))
+             (esc (:message v))))))
+
+;; ----------------------------- approvals -----------------------------------
+
+(defn- approval-fact?
+  "A ledger fact that is evidence of a human decision. Deliberately
+  includes a `:committed` fact carrying `:approved-by`, because -- as
+  `approval-note` MEASURES below -- that is the only form in which a
+  GRANT reaches this repo's store at all."
+  [f]
+  (or (#{:approval-requested :approval-granted :approval-rejected} (:t f))
+      (and (= :committed (:t f)) (some? (:approved-by f)))))
+
+(defn- approval-rows [ledger]
+  (str/join
+   "\n"
+   (for [f ledger :when (approval-fact? f)]
+     (format "        <tr><td>%s</td><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s</td></tr>"
+             (case (:t f)
+               :approval-requested (pill "warn" "requested")
+               :approval-granted   (pill "ok" "granted")
+               :approval-rejected  (pill "critical" "rejected")
+               :committed          (pill "ok" "granted &amp; committed"))
+             (esc (:op f))
+             (opt (:subject f))
+             (if-let [by (or (:by f) (:approved-by f))]
+               (esc by)
+               (pill "muted" "not retained by the store"))
+             (opt (some-> (:reason f) name))))))
+
+(defn- approval-note
+  "MEASURES which approval-lifecycle facts actually survive into the
+  store, instead of asserting a known scaffold defect. Every number
+  below is counted from this run's ledger, so the paragraph rewrites
+  itself if `store/append-ledger!`'s call sites change."
+  [ledger]
+  (let [requested (filterv #(= :approval-requested (:t %)) ledger)
+        granted   (filterv #(= :approval-granted (:t %)) ledger)
+        rejected  (filterv #(= :approval-rejected (:t %)) ledger)
+        commit-by (filterv #(and (= :committed (:t %)) (some? (:approved-by %))) ledger)
+        rej-by    (filterv #(some? (:by %)) rejected)]
+    (str
+     "<p class=\"muted\">The graph pauses at <code>:request-approval</code> "
+     "(<code>interrupt-before</code>) and only resumes when a dispatcher supplies a decision. "
+     "Both outcomes are exercised in this run: one safety flag approved, one rejected.</p>\n"
+     "    <p class=\"note\">"
+     (if (and (empty? requested) (empty? granted) (seq commit-by))
+       (str "<strong>A granted approval reaches the store only as <code>:approved-by</code> on the "
+            "<code>:committed</code> fact.</strong> <code>store/append-ledger!</code> is called from "
+            "the <code>:commit</code> and <code>:hold</code> terminal nodes only, so the "
+            "<code>:approval-requested</code> and <code>:approval-granted</code> facts that the "
+            "<code>:decide</code> and <code>:request-approval</code> nodes emit exist only in the "
+            "run&rsquo;s in-memory <code>:audit</code> channel and never persist &mdash; measured: "
+            (count requested) " <code>:approval-requested</code> and " (count granted)
+            " <code>:approval-granted</code> fact(s) in the ledger, against " (count commit-by)
+            " <code>:committed</code> fact(s) that do carry an approver.")
+       (str "Measured in this run&rsquo;s ledger: " (count requested)
+            " <code>:approval-requested</code>, " (count granted)
+            " <code>:approval-granted</code>, " (count commit-by)
+            " <code>:committed</code> fact(s) carrying <code>:approved-by</code>."))
+     (when (seq rejected)
+       (str " A rejection does land, as <code>:approval-rejected</code>, but "
+            (if (seq rej-by)
+              (str (count rej-by) " of " (count rejected)
+                   " rejection fact(s) name the rejecting dispatcher.")
+              (str "<strong>none of the " (count rejected)
+                   " rejection fact(s) name the rejecting dispatcher</strong> &mdash; "
+                   "<code>transportops.operation</code>&rsquo;s <code>hold-fact</code> does not copy "
+                   "<code>(:by approval)</code> onto the fact it writes, so &ldquo;who rejected "
+                   "this?&rdquo; is not recoverable from the store even though the resume call "
+                   "supplied it."))))
+     "</p>")))
+
+;; ----------------------------- audit ledger --------------------------------
+
+(defn- ledger-row [idx {:keys [t op subject disposition reason violations summary]}]
+  (format "        <tr><td>%d</td><td>%s</td><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s</td></tr>"
+          idx
+          (kw t)
+          (esc op)
+          (opt subject)
+          (opt (or (some-> disposition name) "-"))
+          (cond
+            (seq violations) (esc (str/join ", " (map (comp name :code) violations)))
+            reason (esc (name reason))
+            summary (esc summary)
+            :else dash)))
+
+;; ----------------------------- committed record / attribution --------------
+
+(def ^:private approver-keys
+  "Every key this renderer will accept as 'who approved this'. Scanned
+  against the committed records at RENDER time, so if the store ever
+  starts keeping approver identity on the record, the disclosure below
+  corrects itself with no edit here."
+  [:approved-by :approver :approved-by-id :by :approval])
+
+(defn- approver-on [m]
+  (first (keep #(when (some? (get m %)) %) approver-keys)))
+
+(defn- attribution
+  "MEASURES, rather than assumes, whether approver identity survives
+  into the SSoT. Returns the raw counts the disclosure paragraph is
+  derived from."
+  [db]
+  (let [records   (vec (store/coordination-log db))
+        ledger    (vec (store/ledger db))
+        committed (filterv #(= :committed (:t %)) ledger)]
+    {:records            records
+     :committed          committed
+     :records-with       (filterv approver-on records)
+     :committed-with     (filterv approver-on committed)
+     :granted            (filterv #(= :approval-granted (:t %)) ledger)
+     ;; commit-record! and append-ledger! are called in that order inside
+     ;; the SAME :commit node of the graph, so the i-th record is the
+     ;; i-th :committed fact. Only claim the pairing if the counts agree.
+     :paired?            (= (count records) (count committed))}))
+
+(defn- attribution-note
+  "The disclosure sentence, DERIVED from the measurement above."
+  [{:keys [records records-with committed committed-with granted paired?]}]
+  (let [scanned (str "Scanned each committed record for "
+                     (esc (str/join ", " (map str approver-keys)))
+                     ".")]
+    (cond
+      (seq records-with)
+      (str "<strong>Approver identity is kept on the record.</strong> "
+           (count records-with) " of " (count records)
+           " committed record(s) carry an approver key. " scanned)
+
+      (and (empty? records) (empty? committed))
+      (str "<strong>No commit happened in this run</strong>, so approver "
+           "attribution could not be measured either way. " scanned)
+
+      (or (seq committed-with) (seq granted))
+      (str "<strong>Approver identity is NOT on the committed record &mdash; "
+           "it survives only in the ledger.</strong> "
+           "0 of " (count records) " record(s) in <code>store/coordination-log</code> "
+           "carry an approver key, because <code>transportops.operation</code>'s "
+           "<code>:commit</code> node calls <code>store/commit-record!</code> with the "
+           "advisor proposal, and the proposal never held the approval. "
+           "The append-only ledger does keep it: " (count committed-with)
+           " <code>:committed</code> fact(s) carry <code>:approved-by</code> and "
+           (count granted) " <code>:approval-granted</code> fact(s) carry <code>:by</code>. "
+           "So &ldquo;who approved this?&rdquo; is answerable from the ledger but not "
+           "from the coordination log. This is a disclosure, not a patch: changing what "
+           "<code>commit-record!</code> stores is a governance decision with its own "
+           "contract tests. " scanned
+           (if paired?
+             " Record and fact counts agree, so the two tables below are positionally paired."
+             " Record and fact counts DISAGREE, so the columns below are not paired."))
+
+      :else
+      (str "<strong>No approval path was exercised and no approver key was found "
+           "anywhere</strong> &mdash; neither on the " (count records)
+           " committed record(s) nor in the ledger. " scanned))))
+
+(defn- record-row [idx paired? committed {:keys [op vehicle-id summary confidence effect]}]
+  (let [fact (when paired? (nth committed idx nil))]
+    (format "        <tr><td>%d</td><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s</td><td><code>%s</code></td><td>%s</td></tr>"
+            (inc idx)
+            (esc op)
+            (opt vehicle-id)
+            (opt summary)
+            (if (some? confidence) (esc confidence) dash)
+            (esc effect)
+            (if-let [by (:approved-by fact)]
+              (str (esc by) " <span class=\"muted\">(from ledger, not from record)</span>")
+              (pill "muted" "auto-committed, no approver")))))
+
+(defn- proposal-value-row [{:keys [op vehicle-id value cites]}]
+  (format "        <tr><td><code>%s</code></td><td>%s</td><td><code>%s</code></td><td>%s</td></tr>"
+          (esc op)
+          (opt vehicle-id)
+          (esc (edn-str value))
+          (if (seq cites) (esc (edn-str cites)) (pill "muted" "no citations"))))
+
+;; ============================================================================
+;; Stylesheet
+;; ============================================================================
+
+(def ^:private stylesheet
+  ;; DADS primitives, copied as literals from the vendored stylesheet in
+  ;; this repo's own docs/index.html so the console matches the product
+  ;; face without adding a build dependency. Tints are the -50/-100
+  ;; steps (the --color-semantic-error-1/-2 pair is NOT a strong/weak
+  ;; pair -- both steps are dark -- so it is not used here).
+  (str/join
+   "\n"
+   [":root{"
+    "  --blue-800:#0031d8; --blue-50:#e8f1fe;"
+    "  --green-800:#197a4b; --green-50:#e6f5ec;"
+    "  --orange-800:#c74700; --orange-50:#ffeee2;"
+    "  --red-900:#ce0000; --red-50:#fdeeee;"
+    "  --ink:#1a1a1c; --ink-muted:#626264; --line:#d8d8db; --surface:#fff; --page:#f2f2f4;"
+    "}"
+    "*{box-sizing:border-box}"
+    "body{margin:0;background:var(--page);color:var(--ink);"
+    "  font-family:'Noto Sans JP','Hiragino Sans',system-ui,-apple-system,sans-serif;"
+    "  font-size:14px;line-height:1.7;}"
+    "header.bar{background:var(--blue-800);color:#fff;padding:20px 24px;}"
+    "header.bar h1{margin:0 0 6px;font-size:19px;font-weight:700;letter-spacing:.01em;}"
+    "header.bar .badge{display:inline-block;font-size:12px;background:rgba(255,255,255,.16);"
+    "  border:1px solid rgba(255,255,255,.32);border-radius:4px;padding:3px 9px;}"
+    "main{max-width:1120px;margin:0 auto;padding:24px 20px 56px;}"
+    "section.card{background:var(--surface);border:1px solid var(--line);border-radius:8px;"
+    "  padding:20px 22px;margin-bottom:20px;}"
+    "section.card h2{margin:0 0 4px;font-size:16px;font-weight:700;"
+    "  border-left:4px solid var(--blue-800);padding-left:10px;}"
+    "p.muted,span.muted{color:var(--ink-muted);font-size:12.5px;}"
+    "p.muted{margin:0 0 14px;}"
+    "p.note{margin:0 0 14px;font-size:13px;background:var(--blue-50);"
+    "  border-left:4px solid var(--blue-800);padding:10px 12px;border-radius:0 4px 4px 0;}"
+    "ul.gap{margin:0;padding:12px 12px 12px 32px;font-size:13px;background:var(--orange-50);"
+    "  border-left:4px solid var(--orange-800);border-radius:0 4px 4px 0;}"
+    "ul.gap li+li{margin-top:6px;}"
+    "table{width:100%;border-collapse:collapse;font-size:13px;}"
+    "th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);"
+    "  vertical-align:top;}"
+    "thead th{background:var(--page);font-size:12px;font-weight:700;color:var(--ink-muted);"
+    "  text-transform:uppercase;letter-spacing:.04em;border-bottom:2px solid var(--line);}"
+    "tbody tr:last-child td{border-bottom:none;}"
+    "code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;"
+    "  background:var(--page);border:1px solid var(--line);border-radius:3px;padding:1px 5px;}"
+    "span.pill{display:inline-block;border-radius:11px;padding:1px 10px;font-size:12px;"
+    "  font-weight:700;white-space:nowrap;}"
+    "span.pill.ok{background:var(--green-50);color:var(--green-800);"
+    "  border:1px solid var(--green-800);}"
+    "span.pill.warn{background:var(--orange-50);color:var(--orange-800);"
+    "  border:1px solid var(--orange-800);}"
+    "span.pill.critical{background:var(--red-50);color:var(--red-900);"
+    "  border:1px solid var(--red-900);}"
+    "span.pill.muted{background:var(--page);color:var(--ink-muted);border:1px solid var(--line);}"
+    "footer{max-width:1120px;margin:0 auto;padding:0 20px 40px;"
+    "  color:var(--ink-muted);font-size:12px;}"]))
+
+;; ============================================================================
+;; Document
+;; ============================================================================
+
+(defn- section
+  "One card: heading, lead block, table, and an optional trailing block
+  rendered under the table (used for notes that are only meaningful
+  once the reader has seen the rows)."
+  ([title lead headers body-rows] (section title lead headers body-rows nil))
+  ([title lead headers body-rows after]
+   (str "  <section class=\"card\">\n"
+        "    <h2>" title "</h2>\n"
+        "    " lead "\n"
+        "    <table>\n"
+        "      <thead><tr>"
+        (str/join "" (map #(str "<th>" % "</th>") headers))
+        "</tr></thead>\n"
+        "      <tbody>\n"
+        body-rows "\n"
+        "      </tbody>\n"
+        "    </table>\n"
+        (or after "")
+        "  </section>\n")))
+
+(defn render
+  "Renders the whole console from a store `db` that has already been
+  driven by `run-demo!`."
+  [db]
+  (let [ledger   (vec (store/ledger db))
+        vehicles (vec (store/all-vehicles db))
+        attrib   (attribution db)
+        hard     (hard-holds ledger)
+        phased   (phase-holds ledger)
+        rules    (->> hard (mapcat :violations) (map :code) distinct sort vec)]
+    (str
+     "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
+     "<meta charset=\"utf-8\">\n"
+     "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+     "<meta name=\"color-scheme\" content=\"light\">\n"
+     "<title>cloud-itonami-isic-869 &middot; non-emergency transport logistics &mdash; operator console</title>\n"
+     "<style>\n" stylesheet "\n</style>\n</head>\n<body>\n"
+
+     "<header class=\"bar\">\n"
+     "  <h1>ISIC 869 &middot; Non-emergency transport logistics coordination &mdash; Operator Console</h1>\n"
+     "  <span class=\"badge\">read-only sample &middot; generated at build time from a real actor run &middot; "
+     (count ledger) " audit facts &middot; " (count hard) " HARD governor hold(s)</span>\n"
+     "</header>\n<main>\n"
+
+     "  <section class=\"card\">\n"
+     "    <h2>What this page is</h2>\n"
+     "    <p class=\"note\">Every row below is output of one run of this repo&rsquo;s own compiled "
+     "<code>langgraph-clj</code> StateGraph (<code>transportops.operation/build</code> driven by "
+     "<code>langgraph.graph/run*</code>), checked by the independent "
+     "<code>transportops.governor</code> and the <code>transportops.phase</code> rollout gate, "
+     "against the seeded vehicle directory in <code>transportops.store/demo-data</code>. "
+     "Regenerate with <code>clojure -M:dev:render-html</code>. The generator refuses to write this "
+     "file if the run produces no HARD governor hold, so the refusal path can never quietly "
+     "disappear from the sample.</p>\n"
+     "    <p class=\"muted\">Scope: this actor coordinates <em>non-emergency</em> transport "
+     "logistics only. Emergency dispatch, triage, medical-necessity determination and any "
+     "clinical decision are permanently out of scope and are blocked by content scan, not by "
+     "policy text.</p>\n"
+     "  </section>\n"
+
+     (section
+      "Fleet directory"
+      (str "<p class=\"muted\">The seeded vehicle directory, and what the governor concluded "
+           "about each vehicle this run. Admissibility is re-derived from the vehicle&rsquo;s own "
+           "<code>:registered?</code>/<code>:verified?</code> record &mdash; never from a "
+           "proposal&rsquo;s claim about itself.</p>")
+      ["Vehicle" "Location" "Registered" "Verified" "Governor admissibility" "Last outcome this run"]
+      (str/join "\n" (map (partial vehicle-row ledger) vehicles)))
+
+     (section
+      "Operation gate"
+      (str "<p class=\"muted\">Derived at render time by asking "
+           "<code>transportops.phase/may-auto-commit?</code> and "
+           "<code>transportops.governor/always-escalate-ops</code> directly &mdash; this table is "
+           "computed, not transcribed, so it cannot drift from the code.</p>")
+      ["Op" "Escalates to a human" "First auto-commit phase" "At phase 3"]
+      (str/join "\n" (map gate-row (sort-by str governor/allowed-ops)))
+      (gate-note ledger))
+
+     (section
+      (str "HARD governor holds this run (" (count hard) " fact(s), "
+           (count rules) " distinct rule(s))")
+      (str "<p class=\"muted\">Permanent blocks. These never reach the "
+           "<code>:request-approval</code> node at all &mdash; "
+           "<code>transportops.operation</code>&rsquo;s <code>:decide</code> node tests "
+           "violations before it tests escalation, so no human sign-off can override them. "
+           "Distinct rules fired: <code>"
+           ;; Escape each rule name, THEN join with the markup separator.
+           ;; Joining first and escaping the result would escape the
+           ;; separator's own tags too, printing a literal `</code>, <code>`
+           ;; to the reader -- `esc`'s docstring says it is for RAW values
+           ;; only. Same shape as `gate-note`'s blocker list.
+           (str/join "</code>, <code>" (map (comp esc name) rules))
+           "</code>.</p>")
+      ["Op" "Subject" "Rule" "Governor message"]
+      (violation-rows ledger))
+
+     (section
+      (str "Phase-gated holds (" (count phased) ")")
+      (str "<p class=\"muted\">Clean proposals that the governor did not object to, held only "
+           "because the op is not yet in the running phase&rsquo;s auto set. Unlike a HARD hold "
+           "these are a rollout decision, not a refusal &mdash; the same proposal commits at a "
+           "later phase.</p>")
+      ["Op" "Subject" "Reason" "Violations"]
+      (str/join "\n"
+                (for [f phased]
+                  (format "        <tr><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s</td></tr>"
+                          (esc (:op f)) (opt (:subject f))
+                          (esc (name (:reason f)))
+                          (pill "ok" "none &mdash; governor clean")))))
+
+     (section
+      "Human-in-the-loop decisions"
+      (approval-note ledger)
+      ["Outcome" "Op" "Subject" "Dispatcher" "Reason"]
+      (approval-rows ledger))
+
+     (section
+      (str "Committed coordination log (" (count (:records attrib)) ")")
+      (str "<p class=\"note\">" (attribution-note attrib) "</p>")
+      ["#" "Op" "Vehicle" "Summary" "Confidence" "Effect" "Approved by"]
+      (str/join "\n"
+                (map-indexed
+                 (fn [i r] (record-row i (:paired? attrib) (:committed attrib) r))
+                 (:records attrib))))
+
+     (section
+      "Committed proposal payloads"
+      (str "<p class=\"muted\">The domain value each committed proposal carried, rendered with a "
+           "total order on map keys so the page is byte-stable.</p>")
+      ["Op" "Vehicle" "Value" "Citations"]
+      (str/join "\n" (map proposal-value-row (:records attrib))))
+
+     (section
+      (str "Audit ledger (" (count ledger) " facts, in order)")
+      (str "<p class=\"muted\">The append-only decision-fact log &mdash; every proposal, hold, "
+           "escalation, approval and commit this run produced, in the order "
+           "<code>store/append-ledger!</code> received them.</p>")
+      ["#" "Fact" "Op" "Subject" "Disposition" "Rule / reason / summary"]
+      (str/join "\n" (map-indexed (fn [i f] (ledger-row (inc i) f)) ledger)))
+
+     "</main>\n"
+     "<footer>Generated by <code>transportops.render-html</code> from "
+     "<code>transportops.store/seed-db</code> + <code>transportops.advisor/MockAdvisor</code>. "
+     "Deterministic: no timestamps, no random values, byte-identical across reruns.</footer>\n"
+     "</body>\n</html>\n")))
+
+(defn -main [& args]
+  (let [out    (or (first args) "docs/samples/operator-console.html")
+        db     (run-demo!)
+        ledger (vec (store/ledger db))
+        hard   (hard-holds ledger)]
+    (when (empty? hard)
+      (throw (ex-info
+              (str "REFUSING to write " out
+                   ": the scenario produced ZERO HARD :governor-hold facts. "
+                   "An operator console that shows only happy paths misrepresents this actor -- "
+                   "the Governor's whole contract is that it can permanently refuse. "
+                   "Fix the scenario (or the governor) before regenerating.")
+              {:out out :ledger-facts (count ledger) :hard-holds 0})))
+    (let [f (java.io.File. ^String out)]
+      (when-let [p (.getParentFile f)] (.mkdirs p))
+      (spit f (render db)))
+    (println "wrote" out
+             (str "(" (count ledger) " ledger facts, "
+                  (count hard) " HARD holds over "
+                  (count (->> hard (mapcat :violations) (map :code) distinct)) " distinct rules, "
+                  (count (store/coordination-log db)) " committed records)"))))

@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>cloud-itonami-isic-869 &middot; non-emergency transport logistics &mdash; operator console</title>
+<style>
+:root{
+  --blue-800:#0031d8; --blue-50:#e8f1fe;
+  --green-800:#197a4b; --green-50:#e6f5ec;
+  --orange-800:#c74700; --orange-50:#ffeee2;
+  --red-900:#ce0000; --red-50:#fdeeee;
+  --ink:#1a1a1c; --ink-muted:#626264; --line:#d8d8db; --surface:#fff; --page:#f2f2f4;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);
+  font-family:'Noto Sans JP','Hiragino Sans',system-ui,-apple-system,sans-serif;
+  font-size:14px;line-height:1.7;}
+header.bar{background:var(--blue-800);color:#fff;padding:20px 24px;}
+header.bar h1{margin:0 0 6px;font-size:19px;font-weight:700;letter-spacing:.01em;}
+header.bar .badge{display:inline-block;font-size:12px;background:rgba(255,255,255,.16);
+  border:1px solid rgba(255,255,255,.32);border-radius:4px;padding:3px 9px;}
+main{max-width:1120px;margin:0 auto;padding:24px 20px 56px;}
+section.card{background:var(--surface);border:1px solid var(--line);border-radius:8px;
+  padding:20px 22px;margin-bottom:20px;}
+section.card h2{margin:0 0 4px;font-size:16px;font-weight:700;
+  border-left:4px solid var(--blue-800);padding-left:10px;}
+p.muted,span.muted{color:var(--ink-muted);font-size:12.5px;}
+p.muted{margin:0 0 14px;}
+p.note{margin:0 0 14px;font-size:13px;background:var(--blue-50);
+  border-left:4px solid var(--blue-800);padding:10px 12px;border-radius:0 4px 4px 0;}
+ul.gap{margin:0;padding:12px 12px 12px 32px;font-size:13px;background:var(--orange-50);
+  border-left:4px solid var(--orange-800);border-radius:0 4px 4px 0;}
+ul.gap li+li{margin-top:6px;}
+table{width:100%;border-collapse:collapse;font-size:13px;}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);
+  vertical-align:top;}
+thead th{background:var(--page);font-size:12px;font-weight:700;color:var(--ink-muted);
+  text-transform:uppercase;letter-spacing:.04em;border-bottom:2px solid var(--line);}
+tbody tr:last-child td{border-bottom:none;}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;
+  background:var(--page);border:1px solid var(--line);border-radius:3px;padding:1px 5px;}
+span.pill{display:inline-block;border-radius:11px;padding:1px 10px;font-size:12px;
+  font-weight:700;white-space:nowrap;}
+span.pill.ok{background:var(--green-50);color:var(--green-800);
+  border:1px solid var(--green-800);}
+span.pill.warn{background:var(--orange-50);color:var(--orange-800);
+  border:1px solid var(--orange-800);}
+span.pill.critical{background:var(--red-50);color:var(--red-900);
+  border:1px solid var(--red-900);}
+span.pill.muted{background:var(--page);color:var(--ink-muted);border:1px solid var(--line);}
+footer{max-width:1120px;margin:0 auto;padding:0 20px 40px;
+  color:var(--ink-muted);font-size:12px;}
+</style>
+</head>
+<body>
+<header class="bar">
+  <h1>ISIC 869 &middot; Non-emergency transport logistics coordination &mdash; Operator Console</h1>
+  <span class="badge">read-only sample &middot; generated at build time from a real actor run &middot; 11 audit facts &middot; 5 HARD governor hold(s)</span>
+</header>
+<main>
+  <section class="card">
+    <h2>What this page is</h2>
+    <p class="note">Every row below is output of one run of this repo&rsquo;s own compiled <code>langgraph-clj</code> StateGraph (<code>transportops.operation/build</code> driven by <code>langgraph.graph/run*</code>), checked by the independent <code>transportops.governor</code> and the <code>transportops.phase</code> rollout gate, against the seeded vehicle directory in <code>transportops.store/demo-data</code>. Regenerate with <code>clojure -M:dev:render-html</code>. The generator refuses to write this file if the run produces no HARD governor hold, so the refusal path can never quietly disappear from the sample.</p>
+    <p class="muted">Scope: this actor coordinates <em>non-emergency</em> transport logistics only. Emergency dispatch, triage, medical-necessity determination and any clinical decision are permanently out of scope and are blocked by content scan, not by policy text.</p>
+  </section>
+  <section class="card">
+    <h2>Fleet directory</h2>
+    <p class="muted">The seeded vehicle directory, and what the governor concluded about each vehicle this run. Admissibility is re-derived from the vehicle&rsquo;s own <code>:registered?</code>/<code>:verified?</code> record &mdash; never from a proposal&rsquo;s claim about itself.</p>
+    <table>
+      <thead><tr><th>Vehicle</th><th>Location</th><th>Registered</th><th>Verified</th><th>Governor admissibility</th><th>Last outcome this run</th></tr></thead>
+      <tbody>
+        <tr><td><code>van-001</code></td><td>Dispatch Base A</td><td><span class="pill ok">yes</span></td><td><span class="pill ok">yes</span></td><td><span class="pill ok">admissible</span></td><td><span class="pill critical">HARD hold &middot; effect-not-propose</span></td></tr>
+        <tr><td><code>van-002</code></td><td>Dispatch Base A</td><td><span class="pill ok">yes</span></td><td><span class="pill ok">yes</span></td><td><span class="pill ok">admissible</span></td><td><span class="pill warn">approval rejected</span></td></tr>
+        <tr><td><code>van-003</code></td><td>Maintenance - pending inspection</td><td><span class="pill ok">yes</span></td><td><span class="pill critical">no</span></td><td><span class="pill critical">HARD block &middot; vehicle-unverified</span></td><td><span class="pill critical">HARD hold &middot; vehicle-unverified</span></td></tr>
+      </tbody>
+    </table>
+  </section>
+  <section class="card">
+    <h2>Operation gate</h2>
+    <p class="muted">Derived at render time by asking <code>transportops.phase/may-auto-commit?</code> and <code>transportops.governor/always-escalate-ops</code> directly &mdash; this table is computed, not transcribed, so it cannot drift from the code.</p>
+    <table>
+      <thead><tr><th>Op</th><th>Escalates to a human</th><th>First auto-commit phase</th><th>At phase 3</th></tr></thead>
+      <tbody>
+        <tr><td><code>:coordinate-supply-request</code></td><td><span class="pill muted">only if low confidence</span></td><td>phase 1</td><td><span class="pill ok">auto-commit when clean</span></td></tr>
+        <tr><td><code>:coordinate-vehicle-availability</code></td><td><span class="pill muted">only if low confidence</span></td><td>phase 2</td><td><span class="pill ok">auto-commit when clean</span></td></tr>
+        <tr><td><code>:flag-safety-concern</code></td><td><span class="pill warn">always</span></td><td><span class="pill warn">never at any phase</span></td><td><span class="pill warn">held for a human</span></td></tr>
+        <tr><td><code>:schedule-staff-shift-proposal</code></td><td><span class="pill muted">only if low confidence</span></td><td>phase 1</td><td><span class="pill ok">auto-commit when clean</span></td></tr>
+        <tr><td><code>:schedule-transport</code></td><td><span class="pill muted">only if low confidence</span></td><td>phase 3</td><td><span class="pill ok">auto-commit when clean</span></td></tr>
+      </tbody>
+    </table>
+    <p class="note"><strong>Measured contradiction between this table and the run.</strong> Every op below is listed above as auto-commit-eligible at phase 3, yet none of them reached a <code>:committed</code> fact in this run &mdash; each was permanently blocked instead:</p>
+    <ul class="gap">
+      <li><code>:schedule-staff-shift-proposal</code> &mdash; blocked by <code>vehicle-unverified</code>. <code>transportops.advisor</code>&rsquo;s branch for this op emits no <code>:vehicle-id</code>, so the governor&rsquo;s first HARD check resolves <code>(store/vehicle store nil)</code> to <code>nil</code> and refuses. The phase table therefore promises an auto-commit that the advisor/governor pair cannot deliver &mdash; see the empty Subject and the blank vehicle id in the governor message below.</li>
+    </ul>
+  </section>
+  <section class="card">
+    <h2>HARD governor holds this run (5 fact(s), 3 distinct rule(s))</h2>
+    <p class="muted">Permanent blocks. These never reach the <code>:request-approval</code> node at all &mdash; <code>transportops.operation</code>&rsquo;s <code>:decide</code> node tests violations before it tests escalation, so no human sign-off can override them. Distinct rules fired: <code>effect-not-propose</code>, <code>scope-excluded</code>, <code>vehicle-unverified</code>.</p>
+    <table>
+      <thead><tr><th>Op</th><th>Subject</th><th>Rule</th><th>Governor message</th></tr></thead>
+      <tbody>
+        <tr><td><code>:schedule-transport</code></td><td>van-003</td><td><code>:vehicle-unverified</code></td><td>Vehicle van-003 is not registered/verified in store</td></tr>
+        <tr><td><code>:schedule-transport</code></td><td>van-404</td><td><code>:vehicle-unverified</code></td><td>Vehicle van-404 is not registered/verified in store</td></tr>
+        <tr><td><code>:flag-safety-concern</code></td><td>van-001</td><td><code>:scope-excluded</code></td><td>Proposal contains scope-excluded clinical/emergency/triage content</td></tr>
+        <tr><td><code>:coordinate-vehicle-availability</code></td><td>van-001</td><td><code>:effect-not-propose</code></td><td>Effect must be :propose, got :execute</td></tr>
+        <tr><td><code>:schedule-staff-shift-proposal</code></td><td>&mdash;</td><td><code>:vehicle-unverified</code></td><td>Vehicle  is not registered/verified in store</td></tr>
+      </tbody>
+    </table>
+  </section>
+  <section class="card">
+    <h2>Phase-gated holds (1)</h2>
+    <p class="muted">Clean proposals that the governor did not object to, held only because the op is not yet in the running phase&rsquo;s auto set. Unlike a HARD hold these are a rollout decision, not a refusal &mdash; the same proposal commits at a later phase.</p>
+    <table>
+      <thead><tr><th>Op</th><th>Subject</th><th>Reason</th><th>Violations</th></tr></thead>
+      <tbody>
+        <tr><td><code>:schedule-transport</code></td><td>van-002</td><td>not-in-phase-auto-set</td><td><span class="pill ok">none &mdash; governor clean</span></td></tr>
+      </tbody>
+    </table>
+  </section>
+  <section class="card">
+    <h2>Human-in-the-loop decisions</h2>
+    <p class="muted">The graph pauses at <code>:request-approval</code> (<code>interrupt-before</code>) and only resumes when a dispatcher supplies a decision. Both outcomes are exercised in this run: one safety flag approved, one rejected.</p>
+    <p class="note"><strong>A granted approval reaches the store only as <code>:approved-by</code> on the <code>:committed</code> fact.</strong> <code>store/append-ledger!</code> is called from the <code>:commit</code> and <code>:hold</code> terminal nodes only, so the <code>:approval-requested</code> and <code>:approval-granted</code> facts that the <code>:decide</code> and <code>:request-approval</code> nodes emit exist only in the run&rsquo;s in-memory <code>:audit</code> channel and never persist &mdash; measured: 0 <code>:approval-requested</code> and 0 <code>:approval-granted</code> fact(s) in the ledger, against 1 <code>:committed</code> fact(s) that do carry an approver. A rejection does land, as <code>:approval-rejected</code>, but <strong>none of the 1 rejection fact(s) name the rejecting dispatcher</strong> &mdash; <code>transportops.operation</code>&rsquo;s <code>hold-fact</code> does not copy <code>(:by approval)</code> onto the fact it writes, so &ldquo;who rejected this?&rdquo; is not recoverable from the store even though the resume call supplied it.</p>
+    <table>
+      <thead><tr><th>Outcome</th><th>Op</th><th>Subject</th><th>Dispatcher</th><th>Reason</th></tr></thead>
+      <tbody>
+        <tr><td><span class="pill ok">granted &amp; committed</span></td><td><code>:flag-safety-concern</code></td><td>van-001</td><td>dispatcher-01</td><td>&mdash;</td></tr>
+        <tr><td><span class="pill critical">rejected</span></td><td><code>:flag-safety-concern</code></td><td>van-002</td><td><span class="pill muted">not retained by the store</span></td><td>approver-rejected</td></tr>
+      </tbody>
+    </table>
+  </section>
+  <section class="card">
+    <h2>Committed coordination log (4)</h2>
+    <p class="note"><strong>Approver identity is NOT on the committed record &mdash; it survives only in the ledger.</strong> 0 of 4 record(s) in <code>store/coordination-log</code> carry an approver key, because <code>transportops.operation</code>'s <code>:commit</code> node calls <code>store/commit-record!</code> with the advisor proposal, and the proposal never held the approval. The append-only ledger does keep it: 1 <code>:committed</code> fact(s) carry <code>:approved-by</code> and 0 <code>:approval-granted</code> fact(s) carry <code>:by</code>. So &ldquo;who approved this?&rdquo; is answerable from the ledger but not from the coordination log. This is a disclosure, not a patch: changing what <code>commit-record!</code> stores is a governance decision with its own contract tests. Scanned each committed record for :approved-by, :approver, :approved-by-id, :by, :approval. Record and fact counts agree, so the two tables below are positionally paired.</p>
+    <table>
+      <thead><tr><th>#</th><th>Op</th><th>Vehicle</th><th>Summary</th><th>Confidence</th><th>Effect</th><th>Approved by</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td><code>:coordinate-supply-request</code></td><td>van-001</td><td>Request non-clinical vehicle supplies</td><td>0.88</td><td><code>:propose</code></td><td><span class="pill muted">auto-committed, no approver</span></td></tr>
+        <tr><td>2</td><td><code>:coordinate-vehicle-availability</code></td><td>van-001</td><td>Update vehicle availability status</td><td>0.9</td><td><code>:propose</code></td><td><span class="pill muted">auto-committed, no approver</span></td></tr>
+        <tr><td>3</td><td><code>:schedule-transport</code></td><td>van-001</td><td>Schedule non-emergency patient transport</td><td>0.95</td><td><code>:propose</code></td><td><span class="pill muted">auto-committed, no approver</span></td></tr>
+        <tr><td>4</td><td><code>:flag-safety-concern</code></td><td>van-001</td><td>Flag vehicle maintenance issue</td><td>0.92</td><td><code>:propose</code></td><td>dispatcher-01 <span class="muted">(from ledger, not from record)</span></td></tr>
+      </tbody>
+    </table>
+  </section>
+  <section class="card">
+    <h2>Committed proposal payloads</h2>
+    <p class="muted">The domain value each committed proposal carried, rendered with a total order on map keys so the page is byte-stable.</p>
+    <table>
+      <thead><tr><th>Op</th><th>Vehicle</th><th>Value</th><th>Citations</th></tr></thead>
+      <tbody>
+        <tr><td><code>:coordinate-supply-request</code></td><td>van-001</td><td><code>{:supplies [:fuel, :cleaning-supplies, :safety-equipment]}</code></td><td><span class="pill muted">no citations</span></td></tr>
+        <tr><td><code>:coordinate-vehicle-availability</code></td><td>van-001</td><td><code>{:status :available}</code></td><td><span class="pill muted">no citations</span></td></tr>
+        <tr><td><code>:schedule-transport</code></td><td>van-001</td><td><code>{:transport-type :non-emergency}</code></td><td><span class="pill muted">no citations</span></td></tr>
+        <tr><td><code>:flag-safety-concern</code></td><td>van-001</td><td><code>{:concern-type :mechanical, :description Brake pad wear found during pre-trip inspection}</code></td><td><span class="pill muted">no citations</span></td></tr>
+      </tbody>
+    </table>
+  </section>
+  <section class="card">
+    <h2>Audit ledger (11 facts, in order)</h2>
+    <p class="muted">The append-only decision-fact log &mdash; every proposal, hold, escalation, approval and commit this run produced, in the order <code>store/append-ledger!</code> received them.</p>
+    <table>
+      <thead><tr><th>#</th><th>Fact</th><th>Op</th><th>Subject</th><th>Disposition</th><th>Rule / reason / summary</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td><code>:committed</code></td><td><code>:coordinate-supply-request</code></td><td>van-001</td><td>commit</td><td>Request non-clinical vehicle supplies</td></tr>
+        <tr><td>2</td><td><code>:committed</code></td><td><code>:coordinate-vehicle-availability</code></td><td>van-001</td><td>commit</td><td>Update vehicle availability status</td></tr>
+        <tr><td>3</td><td><code>:committed</code></td><td><code>:schedule-transport</code></td><td>van-001</td><td>commit</td><td>Schedule non-emergency patient transport</td></tr>
+        <tr><td>4</td><td><code>:committed</code></td><td><code>:flag-safety-concern</code></td><td>van-001</td><td>commit</td><td>Flag vehicle maintenance issue</td></tr>
+        <tr><td>5</td><td><code>:governor-hold</code></td><td><code>:schedule-transport</code></td><td>van-002</td><td>hold</td><td>not-in-phase-auto-set</td></tr>
+        <tr><td>6</td><td><code>:approval-rejected</code></td><td><code>:flag-safety-concern</code></td><td>van-002</td><td>hold</td><td>approver-rejected</td></tr>
+        <tr><td>7</td><td><code>:governor-hold</code></td><td><code>:schedule-transport</code></td><td>van-003</td><td>hold</td><td>vehicle-unverified</td></tr>
+        <tr><td>8</td><td><code>:governor-hold</code></td><td><code>:schedule-transport</code></td><td>van-404</td><td>hold</td><td>vehicle-unverified</td></tr>
+        <tr><td>9</td><td><code>:governor-hold</code></td><td><code>:flag-safety-concern</code></td><td>van-001</td><td>hold</td><td>scope-excluded</td></tr>
+        <tr><td>10</td><td><code>:governor-hold</code></td><td><code>:coordinate-vehicle-availability</code></td><td>van-001</td><td>hold</td><td>effect-not-propose</td></tr>
+        <tr><td>11</td><td><code>:governor-hold</code></td><td><code>:schedule-staff-shift-proposal</code></td><td>&mdash;</td><td>hold</td><td>vehicle-unverified</td></tr>
+      </tbody>
+    </table>
+  </section>
+</main>
+<footer>Generated by <code>transportops.render-html</code> from <code>transportops.store/seed-db</code> + <code>transportops.advisor/MockAdvisor</code>. Deterministic: no timestamps, no random values, byte-identical across reruns.</footer>
+</body>
+</html>
