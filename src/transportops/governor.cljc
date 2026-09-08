@@ -63,7 +63,7 @@
   `transportops.phase` independently agrees: :flag-safety-concern is
   never a member of any phase's :auto set either -- two layers, not
   one."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [transportops.store :as store]))
 
 (def confidence-floor 0.6)
@@ -143,13 +143,13 @@
                {:code :effect-not-propose
                 :message (str "Effect must be :propose, got " (:effect proposal))}))
       ;; Check 3: scope exclusion (content scan)
-      (let [proposal-str (str (clojure.string/lower-case
+      (let [proposal-str (str (str/lower
                               (str (:op proposal) " "
                                    (:summary proposal) " "
                                    (:rationale proposal) " "
                                    (:cites proposal) " "
                                    (:value proposal))))]
-        (when (some #(clojure.string/includes? proposal-str %) scope-excluded-terms)
+        (when (some #(str/includes? proposal-str %) scope-excluded-terms)
           (conj! violations
                  {:code :scope-excluded
                   :message "Proposal contains scope-excluded clinical/emergency/triage content"})))
