@@ -30,7 +30,7 @@ approval-rejected decision fact is appended to `transportops.store`'s
 append-only audit ledger (`ledger`/`append-ledger!`) — this wiring was
 already genuine in the pre-graph pipeline and is preserved unchanged, now
 also covering `:hold` (not only auto-commits). 27 tests / 133 assertions
-green (`clojure -M:dev:test`); the demo runner (`clojure -M:dev:run`) drives
+green (`kbb -M:dev:test`); the demo runner (`kbb -M:dev:run`) drives
 the compiled graph end-to-end through a commit path, a phase-hold path, an
 escalate→approve→commit path, and hard-hold paths (unregistered/unverified
 vehicle), printing the resulting audit ledger.
@@ -112,7 +112,7 @@ without governor approval and audit evidence.
 - `transportops.governor` — `TransportGovernor`: three HARD checks + escalation gate
 - `transportops.phase` — 0→3 rollout phase gate
 - `transportops.operation` — compiles the `langgraph-clj` `StateGraph`: intake → advise → govern → decide → commit | request-approval → commit | hold, with `interrupt-before` + checkpoint-based resume for escalated operations
-- `transportops.sim` — demo runner (`clojure -M:dev:run`)
+- `transportops.sim` — demo runner (`kbb -M:dev:run`)
 
 ## Capability layer
 
@@ -125,9 +125,9 @@ See [`docs/business-model.md`](docs/business-model.md) and
 ## Testing
 
 ```bash
-clojure -M:dev:test   # run the test suite (langgraph/langchain resolved via local sibling checkouts)
-clojure -M:lint       # clj-kondo, 0 errors
-clojure -M:dev:run    # demo runner -- drives the compiled StateGraph end-to-end
+kbb -M:dev:test   # run the test suite (langgraph/langchain resolved via local sibling checkouts)
+kbb -M:lint       # clj-kondo, 0 errors
+kbb -M:dev:run    # demo runner -- drives the compiled StateGraph end-to-end
 ```
 
 `:dev` pins the transitive `langchain` dependency to the in-monorepo local

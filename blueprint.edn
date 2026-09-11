@@ -40,9 +40,9 @@
   `test/transportops/operation_test.kotoba` exercising commit /
   hard-hold (unregistered + unverified vehicle) / phase-hold /
   escalate-approve / escalate-reject through the REAL compiled graph
-  end to end, plus a `clojure -M:dev:run` demo runner producing real
+  end to end, plus a `kbb -M:dev:run` demo runner producing real
   ledger entries for every scenario). 27 tests / 133 assertions green
-  (`clojure -M:dev:test`), clj-kondo 0 errors, demo runnable
+  (`kbb -M:dev:test`), clj-kondo 0 errors, demo runnable
   end-to-end. Governance-doc set (LICENSE, GOVERNANCE.md,
   CONTRIBUTING.md, SECURITY.md, CODE_OF_CONDUCT.md), `docs/` (business
   model + operator guide), and CI (`.github/workflows/ci.yml`,

@@ -1,5 +1,5 @@
 (ns transportops.sim
-  "Demo driver -- `clojure -M:run` / `clojure -M:dev:run`. Drives the
+  "Demo driver -- `kbb -M:run` / `kbb -M:dev:run`. Drives the
   REAL compiled `langgraph-clj` `StateGraph` (`transportops.operation/
   build`) end-to-end through a phase-3 auto-commit, an always-escalate
   safety-concern flag (dispatcher approves), a phase-0 hold, and all
